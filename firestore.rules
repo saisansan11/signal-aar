@@ -1,0 +1,148 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function hasOnlyKeys(keys) {
+      return request.resource.data.keys().hasOnly(keys);
+    }
+
+    function isTrimmedString(field, minLen, maxLen) {
+      return field is string && field.size() >= minLen && field.size() <= maxLen;
+    }
+
+    function isOptionalString(field, maxLen) {
+      return field == null || (field is string && field.size() <= maxLen);
+    }
+
+    function isTimestampLike(field) {
+      return field is timestamp || field is string;
+    }
+
+    function sessionStatusValid(status) {
+      return status in ['draft', 'active', 'closed'];
+    }
+
+    function questionTypeValid(kind) {
+      return kind in ['multipleChoice', 'yesNo', 'rating', 'openText'];
+    }
+
+    function issueSeverityValid(level) {
+      return level in ['P1', 'P2', 'P3', 'P4'];
+    }
+
+    function issueStatusValid(status) {
+      return status in ['open', 'inProgress', 'resolved', 'ignored'];
+    }
+
+    function responseMatchesQuestion() {
+      let q = get(/databases/$(database)/documents/questions/$(request.resource.data.questionId));
+      return exists(/databases/$(database)/documents/questions/$(request.resource.data.questionId))
+        && q.data.sessionId == request.resource.data.sessionId
+        && (
+          (q.data.type == 'rating' && request.resource.data.ratingValue is int && request.resource.data.ratingValue >= 1 && request.resource.data.ratingValue <= 5)
+          || ((q.data.type == 'multipleChoice' || q.data.type == 'yesNo') && isTrimmedString(request.resource.data.selectedOption, 1, 120))
+          || (q.data.type == 'openText' && isTrimmedString(request.resource.data.answerText, 1, 1200))
+        );
+    }
+
+    match /courses/{courseId} {
+      allow read, write: if true;
+    }
+
+    match /batches/{batchId} {
+      allow read, write: if true;
+    }
+
+    match /liveSessions/{sessionId} {
+      allow read: if true;
+      allow create: if hasOnlyKeys([
+          'sessionId', 'courseId', 'batchId', 'title', 'status', 'currentQuestionId',
+          'joinCode', 'createdBy', 'createdAt', 'closedAt'
+        ])
+        && request.resource.data.sessionId is string
+        && isTrimmedString(request.resource.data.courseId, 1, 80)
+        && isTrimmedString(request.resource.data.batchId, 1, 80)
+        && isTrimmedString(request.resource.data.title, 1, 200)
+        && sessionStatusValid(request.resource.data.status)
+        && isOptionalString(request.resource.data.currentQuestionId, 80)
+        && isTrimmedString(request.resource.data.joinCode, 4, 12)
+        && isTrimmedString(request.resource.data.createdBy, 1, 120)
+        && isTimestampLike(request.resource.data.createdAt)
+        && (request.resource.data.closedAt == null || isTimestampLike(request.resource.data.closedAt));
+      allow update: if hasOnlyKeys([
+          'sessionId', 'courseId', 'batchId', 'title', 'status', 'currentQuestionId',
+          'joinCode', 'createdBy', 'createdAt', 'closedAt'
+        ])
+        && request.resource.data.sessionId == resource.data.sessionId
+        && request.resource.data.courseId == resource.data.courseId
+        && request.resource.data.batchId == resource.data.batchId
+        && request.resource.data.joinCode == resource.data.joinCode
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.createdAt == resource.data.createdAt
+        && isTrimmedString(request.resource.data.title, 1, 200)
+        && sessionStatusValid(request.resource.data.status)
+        && isOptionalString(request.resource.data.currentQuestionId, 80)
+        && (request.resource.data.closedAt == null || isTimestampLike(request.resource.data.closedAt));
+      allow delete: if false;
+    }
+
+    match /questions/{questionId} {
+      allow read: if true;
+      allow create, update: if hasOnlyKeys([
+          'questionId', 'sessionId', 'text', 'type', 'options', 'order', 'isActive', 'createdAt'
+        ])
+        && request.resource.data.questionId is string
+        && isTrimmedString(request.resource.data.sessionId, 1, 80)
+        && isTrimmedString(request.resource.data.text, 1, 800)
+        && questionTypeValid(request.resource.data.type)
+        && request.resource.data.options is list
+        && request.resource.data.options.size() <= 12
+        && request.resource.data.order is int
+        && request.resource.data.order >= 1
+        && request.resource.data.isActive is bool
+        && isTimestampLike(request.resource.data.createdAt);
+      allow delete: if false;
+    }
+
+    match /responses/{responseId} {
+      allow read: if true;
+      allow create: if hasOnlyKeys([
+          'responseId', 'sessionId', 'questionId', 'batchId', 'studentAlias',
+          'answerText', 'selectedOption', 'ratingValue', 'createdAt'
+        ])
+        && request.resource.data.responseId is string
+        && isTrimmedString(request.resource.data.sessionId, 1, 80)
+        && isTrimmedString(request.resource.data.questionId, 1, 80)
+        && isTrimmedString(request.resource.data.batchId, 1, 80)
+        && isTrimmedString(request.resource.data.studentAlias, 1, 80)
+        && request.resource.data.answerText is string
+        && request.resource.data.answerText.size() <= 1200
+        && request.resource.data.selectedOption is string
+        && request.resource.data.selectedOption.size() <= 120
+        && (request.resource.data.ratingValue == null || request.resource.data.ratingValue is int)
+        && isTimestampLike(request.resource.data.createdAt)
+        && get(/databases/$(database)/documents/liveSessions/$(request.resource.data.sessionId)).data.status == 'active'
+        && responseMatchesQuestion();
+      allow update, delete: if false;
+    }
+
+    match /issues/{issueId} {
+      allow read: if true;
+      allow create, update: if request.resource.data.courseId is string
+        && request.resource.data.batchId is string
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && issueSeverityValid(request.resource.data.severity)
+        && issueStatusValid(request.resource.data.status);
+      allow delete: if false;
+    }
+
+    match /actions/{actionId} {
+      allow read, write: if true;
+    }
+
+    match /impactRecords/{impactId} {
+      allow read, write: if true;
+    }
+  }
+}

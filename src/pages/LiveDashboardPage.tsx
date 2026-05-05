@@ -190,7 +190,13 @@ export default function LiveDashboardPage() {
   const [selectedCluster, setSelectedCluster] = useState<ThemeCluster | null>(null)
   const [issuedClusterIds, setIssuedClusterIds] = useState<Set<string>>(new Set())
   const [showQR,          setShowQR]          = useState(false)
-  const [presMode,        setPresMode]        = useState(false)
+  const [presMode,        setPresMode]        = useState(() => {
+    try {
+      return localStorage.getItem('signal-aar:pres-mode') === '1'
+    } catch {
+      return false
+    }
+  })
   const [seedBusy,        setSeedBusy]        = useState(false)
   const [seedMsg,         setSeedMsg]         = useState('')
   const pageRef = useRef<HTMLDivElement>(null)
@@ -216,6 +222,32 @@ export default function LiveDashboardPage() {
     })
     return u
   }, [sessionId, activeQ?.questionId])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('signal-aar:pres-mode', presMode ? '1' : '0')
+    } catch {
+      // Ignore storage failures in private browsing mode.
+    }
+  }, [presMode])
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setShowQR(false)
+        setPresMode(false)
+      }
+
+      if ((e.key === 'p' || e.key === 'P') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const target = e.target as HTMLElement | null
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+        setPresMode(v => !v)
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   // ── actions ───────────────────────────────────────────────────
   async function activateQuestion(qId: string) {
