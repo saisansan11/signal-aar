@@ -8,13 +8,13 @@ export async function getBatchesByCourse(courseId: string): Promise<Batch[]> {
   if (USE_MOCK) return MOCK_BATCHES.filter(b => b.courseId === courseId)
   const q = query(collection(db!, 'batches'), where('courseId', '==', courseId))
   const snap = await getDocs(q)
-  return snap.docs.map(d => ({ batchId: d.id, ...d.data() } as Batch))
+  return snap.docs.map(d => ({ ...d.data(), batchId: d.id } as Batch))
 }
 
 export async function getAllBatches(): Promise<Batch[]> {
   if (USE_MOCK) return MOCK_BATCHES
   const snap = await getDocs(collection(db!, 'batches'))
-  return snap.docs.map(d => ({ batchId: d.id, ...d.data() } as Batch))
+  return snap.docs.map(d => ({ ...d.data(), batchId: d.id } as Batch))
 }
 
 export async function createBatch(data: Omit<Batch, 'batchId'>): Promise<Batch> {

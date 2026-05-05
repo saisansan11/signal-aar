@@ -8,7 +8,7 @@ import { nowIso } from '../utils/dateFormat'
 export async function getCourses(): Promise<Course[]> {
   if (USE_MOCK) return MOCK_COURSES
   const snap = await getDocs(collection(db!, 'courses'))
-  return snap.docs.map(d => ({ courseId: d.id, ...d.data() } as Course))
+  return snap.docs.map(d => ({ ...d.data(), courseId: d.id } as Course))
 }
 
 export async function createCourse(data: Omit<Course, 'courseId' | 'createdAt'>): Promise<Course> {

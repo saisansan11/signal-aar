@@ -20,21 +20,43 @@ export default function StudentAnswerPage() {
 
   useEffect(() => {
     if (!code) return
+    let unsubscribeSession = () => {}
+    let unsubscribeQuestions = () => {}
+    let cancelled = false
+
     getSessionByCode(code).then(s => {
-      if (s) {
-        setSession(s)
-        subscribeToSession(s.sessionId, setSession)
-        subscribeToQuestions(s.sessionId, setQuestions)
-        // Check already submitted questions
-        getResponsesByQuestion(s.sessionId, '').then(() => {})
-      }
+      if (!s || cancelled) return
+      setSession(s)
+      unsubscribeSession = subscribeToSession(s.sessionId, setSession)
+      unsubscribeQuestions = subscribeToQuestions(s.sessionId, setQuestions)
     })
+
+    return () => {
+      cancelled = true
+      unsubscribeSession()
+      unsubscribeQuestions()
+    }
   }, [code])
 
   const activeQ = questions.find(q => q.questionId === session?.currentQuestionId)
   const alreadySubmitted = activeQ ? submitted.has(activeQ.questionId) : false
 
-  // Reset picks when question changes
+  useEffect(() => {
+    if (!session || !activeQ) return
+    let cancelled = false
+
+    getResponsesByQuestion(session.sessionId, activeQ.questionId).then(rs => {
+      if (cancelled) return
+      if (rs.some(r => r.studentAlias === alias)) {
+        setSubmitted(prev => new Set([...prev, activeQ.questionId]))
+      }
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [session?.sessionId, activeQ?.questionId, alias])
+
   useEffect(() => {
     setRatingPick(0)
     setChoicePick('')
@@ -86,7 +108,6 @@ export default function StudentAnswerPage() {
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: T.bg }}>
-      {/* Header */}
       <header className="px-4 py-3 flex items-center justify-between border-b" style={{ borderColor: T.border, background: T.surface }}>
         <div>
           <p className="text-[10px] font-mono" style={{ color: T.fg3 }}>{code}</p>
@@ -98,7 +119,6 @@ export default function StudentAnswerPage() {
         </div>
       </header>
 
-      {/* Progress dots */}
       <div className="flex gap-1.5 px-4 py-3">
         {questions.map(q => (
           <div
@@ -116,7 +136,6 @@ export default function StudentAnswerPage() {
         ))}
       </div>
 
-      {/* Content */}
       <div className="flex-1 flex flex-col p-4">
         {!activeQ ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-3">
@@ -136,7 +155,6 @@ export default function StudentAnswerPage() {
           </div>
         ) : (
           <>
-            {/* Question */}
             <div className="mb-6 p-4 rounded-2xl" style={{ background: T.surface, border: `1px solid ${T.border}` }}>
               <p className="text-[11px] font-mono mb-2" style={{ color: T.primary }}>
                 Q{questions.findIndex(q => q.questionId === activeQ.questionId) + 1} · {activeQ.type}
@@ -144,7 +162,6 @@ export default function StudentAnswerPage() {
               <p className="text-[16px] font-semibold leading-snug" style={{ color: T.fg1 }}>{activeQ.text}</p>
             </div>
 
-            {/* Multiple choice / Yes-No */}
             {(activeQ.type === 'multipleChoice' || activeQ.type === 'yesNo') && (
               <div className="flex flex-col gap-3">
                 {activeQ.options.map((opt, i) => (
@@ -165,7 +182,6 @@ export default function StudentAnswerPage() {
               </div>
             )}
 
-            {/* Rating */}
             {activeQ.type === 'rating' && (
               <div className="flex flex-col items-center gap-4 py-4">
                 <div className="flex gap-4">
@@ -188,7 +204,6 @@ export default function StudentAnswerPage() {
               </div>
             )}
 
-            {/* Open text */}
             {activeQ.type === 'openText' && (
               <textarea
                 value={openText}
@@ -204,7 +219,6 @@ export default function StudentAnswerPage() {
               />
             )}
 
-            {/* Submit */}
             <button
               onClick={handleSubmit}
               disabled={!canSubmit}

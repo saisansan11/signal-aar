@@ -10,20 +10,21 @@ import { nowIso } from '../utils/dateFormat'
 export async function getAllIssues(): Promise<Issue[]> {
   if (USE_MOCK) return [...MOCK_ISSUES]
   const snap = await getDocs(collection(db!, 'issues'))
-  return snap.docs.map(d => ({ issueId: d.id, ...d.data() } as Issue))
+  return snap.docs.map(d => ({ ...d.data(), issueId: d.id } as Issue))
 }
 
 export async function getIssuesByCourse(courseId: string): Promise<Issue[]> {
   if (USE_MOCK) return MOCK_ISSUES.filter(i => i.courseId === courseId)
   const q = query(collection(db!, 'issues'), where('courseId', '==', courseId))
   const snap = await getDocs(q)
-  return snap.docs.map(d => ({ issueId: d.id, ...d.data() } as Issue))
+  return snap.docs.map(d => ({ ...d.data(), issueId: d.id } as Issue))
 }
 
 export async function createIssue(data: Omit<Issue, 'issueId' | 'createdAt' | 'updatedAt'>): Promise<Issue> {
   const issue: Issue = { ...data, issueId: newId('i'), createdAt: nowIso(), updatedAt: nowIso() }
   if (!USE_MOCK) {
-    const ref = await addDoc(collection(db!, 'issues'), { ...issue, createdAt: serverTimestamp(), updatedAt: serverTimestamp() })
+    const { issueId: _issueId, ...payload } = issue
+    const ref = await addDoc(collection(db!, 'issues'), { ...payload, createdAt: serverTimestamp(), updatedAt: serverTimestamp() })
     return { ...issue, issueId: ref.id }
   }
   MOCK_ISSUES.push(issue)
@@ -44,19 +45,20 @@ export async function getActionsByIssue(issueId: string): Promise<Action[]> {
   if (USE_MOCK) return MOCK_ACTIONS.filter(a => a.issueId === issueId)
   const q = query(collection(db!, 'actions'), where('issueId', '==', issueId))
   const snap = await getDocs(q)
-  return snap.docs.map(d => ({ actionId: d.id, ...d.data() } as Action))
+  return snap.docs.map(d => ({ ...d.data(), actionId: d.id } as Action))
 }
 
 export async function getAllActions(): Promise<Action[]> {
   if (USE_MOCK) return [...MOCK_ACTIONS]
   const snap = await getDocs(collection(db!, 'actions'))
-  return snap.docs.map(d => ({ actionId: d.id, ...d.data() } as Action))
+  return snap.docs.map(d => ({ ...d.data(), actionId: d.id } as Action))
 }
 
 export async function createAction(data: Omit<Action, 'actionId' | 'createdAt' | 'updatedAt'>): Promise<Action> {
   const action: Action = { ...data, actionId: newId('a'), createdAt: nowIso(), updatedAt: nowIso() }
   if (!USE_MOCK) {
-    const ref = await addDoc(collection(db!, 'actions'), { ...action, createdAt: serverTimestamp(), updatedAt: serverTimestamp() })
+    const { actionId: _actionId, ...payload } = action
+    const ref = await addDoc(collection(db!, 'actions'), { ...payload, createdAt: serverTimestamp(), updatedAt: serverTimestamp() })
     return { ...action, actionId: ref.id }
   }
   MOCK_ACTIONS.push(action)
@@ -66,5 +68,5 @@ export async function createAction(data: Omit<Action, 'actionId' | 'createdAt' |
 export async function getAllImpactRecords(): Promise<ImpactRecord[]> {
   if (USE_MOCK) return [...MOCK_IMPACT_RECORDS]
   const snap = await getDocs(collection(db!, 'impactRecords'))
-  return snap.docs.map(d => ({ impactId: d.id, ...d.data() } as ImpactRecord))
+  return snap.docs.map(d => ({ ...d.data(), impactId: d.id } as ImpactRecord))
 }

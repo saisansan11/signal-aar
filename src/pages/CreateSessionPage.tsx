@@ -73,12 +73,21 @@ export default function CreateSessionPage() {
     setSaving(true)
     try {
       const session = await createSession({ courseId, batchId, title, createdBy: 'instructor' })
+      let firstQuestionId: string | null = null
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i]
-        await addQuestion({ sessionId: session.sessionId, text: q.text, type: q.type, options: q.options, order: i + 1, isActive: false })
+        const created = await addQuestion({
+          sessionId: session.sessionId,
+          text: q.text,
+          type: q.type,
+          options: q.options,
+          order: i + 1,
+          isActive: startNow && i === 0,
+        })
+        if (i === 0) firstQuestionId = created.questionId
       }
       if (startNow) {
-        await updateSessionStatus(session.sessionId, 'active')
+        await updateSessionStatus(session.sessionId, 'active', firstQuestionId)
       }
       nav(`/sessions/${session.sessionId}/dashboard`)
     } finally {

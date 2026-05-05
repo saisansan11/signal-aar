@@ -6,6 +6,8 @@ import { normalizeCode } from '../utils/joinCode'
 import logo from '../assets/logo.jpg'
 
 const ALIAS_KEY = 'signal-aar:student-alias'
+const DEPT_TH = 'แผนกวิชาการสื่อสารประเภทวิทยุและการสงครามอิเล็กทรอนิกส์'
+const DEPT_EN = 'RADIO & EW DEPT.'
 
 export default function StudentJoinPage() {
   const nav = useNavigate()
@@ -68,11 +70,14 @@ export default function StudentJoinPage() {
       />
 
       <div className="relative z-10 mb-8 flex flex-col items-center gap-3">
-        <img src={logo} alt="วสว.กศ.รร.ส.สส." className="rounded-full object-cover" style={{ width: 80, height: 80 }} />
+        <img src={logo} alt={DEPT_TH} className="rounded-full object-cover" style={{ width: 80, height: 80 }} />
         <div className="text-center">
-          <p className="text-[11px] font-bold tracking-[3px] uppercase" style={{ color: T.primary }}>วสว.กศ.รร.ส.สส.</p>
+          <p className="text-[11px] font-bold tracking-[3px] uppercase" style={{ color: T.primary }}>{DEPT_EN}</p>
           <h1 className="text-[22px] font-bold mt-1" style={{ color: T.fg1 }}>เข้าร่วม AAR Session</h1>
           <p className="text-[13px] mt-1 max-w-sm" style={{ color: T.fg3 }}>
+            {DEPT_TH}
+          </p>
+          <p className="text-[13px] mt-2 max-w-sm" style={{ color: T.fg3 }}>
             ใส่รหัสที่ได้รับจากครูผู้สอน แล้วส่งความคิดเห็นได้ทันทีโดยไม่ต้องล็อกอิน
           </p>
         </div>

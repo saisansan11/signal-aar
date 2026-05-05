@@ -56,10 +56,9 @@ service cloud.firestore {
     match /liveSessions/{sessionId} {
       allow read: if true;
       allow create: if hasOnlyKeys([
-          'sessionId', 'courseId', 'batchId', 'title', 'status', 'currentQuestionId',
+          'courseId', 'batchId', 'title', 'status', 'currentQuestionId',
           'joinCode', 'createdBy', 'createdAt', 'closedAt'
         ])
-        && request.resource.data.sessionId is string
         && isTrimmedString(request.resource.data.courseId, 1, 80)
         && isTrimmedString(request.resource.data.batchId, 1, 80)
         && isTrimmedString(request.resource.data.title, 1, 200)
@@ -70,10 +69,9 @@ service cloud.firestore {
         && isTimestampLike(request.resource.data.createdAt)
         && (request.resource.data.closedAt == null || isTimestampLike(request.resource.data.closedAt));
       allow update: if hasOnlyKeys([
-          'sessionId', 'courseId', 'batchId', 'title', 'status', 'currentQuestionId',
+          'courseId', 'batchId', 'title', 'status', 'currentQuestionId',
           'joinCode', 'createdBy', 'createdAt', 'closedAt'
         ])
-        && request.resource.data.sessionId == resource.data.sessionId
         && request.resource.data.courseId == resource.data.courseId
         && request.resource.data.batchId == resource.data.batchId
         && request.resource.data.joinCode == resource.data.joinCode
@@ -89,9 +87,8 @@ service cloud.firestore {
     match /questions/{questionId} {
       allow read: if true;
       allow create, update: if hasOnlyKeys([
-          'questionId', 'sessionId', 'text', 'type', 'options', 'order', 'isActive', 'createdAt'
+          'sessionId', 'text', 'type', 'options', 'order', 'isActive', 'createdAt'
         ])
-        && request.resource.data.questionId is string
         && isTrimmedString(request.resource.data.sessionId, 1, 80)
         && isTrimmedString(request.resource.data.text, 1, 800)
         && questionTypeValid(request.resource.data.type)
@@ -107,10 +104,9 @@ service cloud.firestore {
     match /responses/{responseId} {
       allow read: if true;
       allow create: if hasOnlyKeys([
-          'responseId', 'sessionId', 'questionId', 'batchId', 'studentAlias',
+          'sessionId', 'questionId', 'batchId', 'studentAlias',
           'answerText', 'selectedOption', 'ratingValue', 'createdAt'
         ])
-        && request.resource.data.responseId is string
         && isTrimmedString(request.resource.data.sessionId, 1, 80)
         && isTrimmedString(request.resource.data.questionId, 1, 80)
         && isTrimmedString(request.resource.data.batchId, 1, 80)

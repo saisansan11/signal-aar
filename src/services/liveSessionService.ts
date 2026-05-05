@@ -12,7 +12,7 @@ import { generateJoinCode } from '../utils/joinCode'
 export async function getAllSessions(): Promise<LiveSession[]> {
   if (USE_MOCK) return [...MOCK_SESSIONS]
   const snap = await getDocs(collection(db!, 'liveSessions'))
-  return snap.docs.map(d => ({ sessionId: d.id, ...d.data() } as LiveSession))
+  return snap.docs.map(d => ({ ...d.data(), sessionId: d.id } as LiveSession))
 }
 
 export async function getSessionByCode(code: string): Promise<LiveSession | null> {
@@ -21,7 +21,7 @@ export async function getSessionByCode(code: string): Promise<LiveSession | null
   const snap = await getDocs(q)
   if (snap.empty) return null
   const d = snap.docs[0]
-  return { sessionId: d.id, ...d.data() } as LiveSession
+  return { ...d.data(), sessionId: d.id } as LiveSession
 }
 
 export async function getSessionById(sessionId: string): Promise<LiveSession | null> {
@@ -29,7 +29,7 @@ export async function getSessionById(sessionId: string): Promise<LiveSession | n
   const ref = doc(db!, 'liveSessions', sessionId)
   const snap = await getDoc(ref)
   if (!snap.exists()) return null
-  return { sessionId: snap.id, ...snap.data() } as LiveSession
+  return { ...snap.data(), sessionId: snap.id } as LiveSession
 }
 
 export async function createSession(data: Omit<LiveSession, 'sessionId' | 'joinCode' | 'createdAt' | 'closedAt' | 'status' | 'currentQuestionId'>): Promise<LiveSession> {
@@ -43,7 +43,8 @@ export async function createSession(data: Omit<LiveSession, 'sessionId' | 'joinC
     closedAt: null,
   }
   if (!USE_MOCK) {
-    const ref = await addDoc(collection(db!, 'liveSessions'), { ...session, createdAt: serverTimestamp() })
+    const { sessionId: _sessionId, ...payload } = session
+    const ref = await addDoc(collection(db!, 'liveSessions'), { ...payload, createdAt: serverTimestamp() })
     return { ...session, sessionId: ref.id }
   }
   MOCK_SESSIONS.push(session)
@@ -69,6 +70,6 @@ export function subscribeToSession(sessionId: string, cb: (s: LiveSession | null
     return () => {}
   }
   return onSnapshot(doc(db!, 'liveSessions', sessionId), snap => {
-    cb(snap.exists() ? { sessionId: snap.id, ...snap.data() } as LiveSession : null)
+    cb(snap.exists() ? { ...snap.data(), sessionId: snap.id } as LiveSession : null)
   })
 }

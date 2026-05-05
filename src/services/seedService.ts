@@ -21,7 +21,7 @@ const DEMO_COURSE: Course = {
   courseId:    SEED_COURSE_ID,
   name:        'ECM Burn-through & Jamming',
   description: 'หลักสูตรเทคนิค ECM และการรบกวนสัญญาณ — Demo',
-  department:  'แผนกวิชา EW',
+  department:  'แผนกวิชาการสื่อสารประเภทวิทยุและการสงครามอิเล็กทรอนิกส์',
   createdAt:   new Date().toISOString(),
 }
 

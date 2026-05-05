@@ -1,9 +1,9 @@
 import type { Course, Batch, LiveSession, Question, Response, ThemeCluster, Issue, Action, ImpactRecord } from '../models'
 
 export const MOCK_COURSES: Course[] = [
-  { courseId: 'c1', name: 'สงครามอิเล็กทรอนิกส์เบื้องต้น', description: 'หลักสูตร EW สำหรับนายสิบชั้นต้น', department: 'แผนกวิชา EW', createdAt: '2025-01-15T08:00:00Z' },
-  { courseId: 'c2', name: 'ECM Burn-through & Jamming', description: 'หลักสูตรเทคนิค ECM และการรบกวนสัญญาณ', department: 'แผนกวิชา EW', createdAt: '2025-02-01T08:00:00Z' },
-  { courseId: 'c3', name: 'Electronic Support Measures', description: 'ESM / DF / EOB สำหรับนายสิบอาวุโส', department: 'แผนกวิชา EW', createdAt: '2025-03-01T08:00:00Z' },
+  { courseId: 'c1', name: 'สงครามอิเล็กทรอนิกส์เบื้องต้น', description: 'หลักสูตร EW สำหรับนายสิบชั้นต้น', department: 'แผนกวิชาการสื่อสารประเภทวิทยุและการสงครามอิเล็กทรอนิกส์', createdAt: '2025-01-15T08:00:00Z' },
+  { courseId: 'c2', name: 'ECM Burn-through & Jamming', description: 'หลักสูตรเทคนิค ECM และการรบกวนสัญญาณ', department: 'แผนกวิชาการสื่อสารประเภทวิทยุและการสงครามอิเล็กทรอนิกส์', createdAt: '2025-02-01T08:00:00Z' },
+  { courseId: 'c3', name: 'Electronic Support Measures', description: 'ESM / DF / EOB สำหรับนายสิบอาวุโส', department: 'แผนกวิชาการสื่อสารประเภทวิทยุและการสงครามอิเล็กทรอนิกส์', createdAt: '2025-03-01T08:00:00Z' },
 ]
 
 export const MOCK_BATCHES: Batch[] = [
