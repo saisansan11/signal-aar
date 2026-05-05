@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { T } from '../tokens'
 import { getSessionByCode } from '../services/liveSessionService'
 import { normalizeCode } from '../utils/joinCode'
+import logo from '../assets/logo.jpg'
 
 export default function StudentJoinPage() {
   const nav = useNavigate()
@@ -34,9 +35,9 @@ export default function StudentJoinPage() {
     >
       {/* App icon */}
       <div className="mb-8 flex flex-col items-center gap-3">
-        <AppMark size={72} />
+        <img src={logo} alt="วสว.กศ.รร.ส.สส." className="rounded-full object-cover" style={{ width: 80, height: 80 }} />
         <div className="text-center">
-          <p className="text-[11px] font-bold tracking-[3px] uppercase" style={{ color: T.primary }}>Signal School</p>
+          <p className="text-[11px] font-bold tracking-[3px] uppercase" style={{ color: T.primary }}>วสว.กศ.รร.ส.สส.</p>
           <h1 className="text-[22px] font-bold mt-1" style={{ color: T.fg1 }}>เข้าร่วม AAR Session</h1>
           <p className="text-[13px] mt-1" style={{ color: T.fg3 }}>ใส่รหัสที่ได้รับจากครูผู้สอน</p>
         </div>
@@ -100,27 +101,5 @@ export default function StudentJoinPage() {
         </p>
       </div>
     </div>
-  )
-}
-
-function AppMark({ size = 64 }: { size?: number }) {
-  const r = Math.round(size * 0.2)
-  return (
-    <svg width={size} height={size} viewBox="0 0 64 64" style={{ borderRadius: r }}>
-      <defs>
-        <linearGradient id="am2-bg" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#FFAD33" />
-          <stop offset="100%" stopColor="#E68600" />
-        </linearGradient>
-      </defs>
-      <rect width="64" height="64" rx={r * 2} fill="url(#am2-bg)" />
-      <path d="M14 44 A22 22 0 0 1 50 44" fill="none" stroke="#0D1117" strokeWidth="2" opacity="0.35" />
-      <path d="M20 44 A16 16 0 0 1 44 44" fill="none" stroke="#0D1117" strokeWidth="2" opacity="0.5" />
-      <path d="M26 44 A10 10 0 0 1 38 44" fill="none" stroke="#0D1117" strokeWidth="2" opacity="0.7" />
-      <rect x="30" y="44" width="4" height="10" fill="#0D1117" />
-      <rect x="22" y="52" width="20" height="4" rx="1" fill="#0D1117" />
-      <path d="M32 44 L46 22" stroke="#0D1117" strokeWidth="2.4" strokeLinecap="round" />
-      <circle cx="46" cy="22" r="2.4" fill="#fff" />
-    </svg>
   )
 }

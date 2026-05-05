@@ -1,6 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { T } from '../../tokens'
 import { MIcon } from '../ui'
+import logo from '../../assets/logo.jpg'
 
 const NAV = [
   { to: '/', icon: 'dashboard', label: 'Dashboard' },
@@ -19,12 +20,17 @@ export default function AppShell() {
         style={{ background: T.surface, borderColor: T.border }}
       >
         {/* Logo */}
-        <div className="flex items-center gap-3 px-4 py-5 border-b" style={{ borderColor: T.border }}>
-          <AppMark size={32} />
-          <span className="hidden lg:block text-[13px] font-bold leading-tight" style={{ color: T.fg1 }}>
-            Signal AAR<br />
-            <span className="font-normal text-[11px]" style={{ color: T.fg3 }}>Live & Improvement</span>
-          </span>
+        <div className="flex items-center gap-3 px-3 py-4 border-b" style={{ borderColor: T.border }}>
+          <img
+            src={logo}
+            alt="วสว.กศ.รร.ส.สส."
+            className="shrink-0 rounded-full object-cover"
+            style={{ width: 36, height: 36 }}
+          />
+          <div className="hidden lg:block min-w-0">
+            <p className="text-[13px] font-bold leading-tight truncate" style={{ color: T.fg1 }}>Signal AAR</p>
+            <p className="text-[10px] leading-tight" style={{ color: T.fg3 }}>วสว.กศ.รร.ส.สส.</p>
+          </div>
         </div>
 
         {/* Nav */}
@@ -35,10 +41,10 @@ export default function AppShell() {
               to={n.to}
               end={n.to === '/'}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-[13px] font-medium group
-                 ${isActive ? 'bg-primary/10 text-primary' : 'hover:bg-white/5 text-fg2 hover:text-fg1'}`
+                `flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-[13px] font-medium
+                 ${isActive ? 'bg-primary/10' : 'hover:bg-white/5'}`
               }
-              style={({ isActive }) => ({ color: isActive ? T.primary : undefined })}
+              style={({ isActive }) => ({ color: isActive ? T.primary : T.fg2 })}
             >
               {({ isActive }) => (
                 <>
@@ -62,27 +68,5 @@ export default function AppShell() {
         <Outlet />
       </main>
     </div>
-  )
-}
-
-function AppMark({ size = 32 }: { size?: number }) {
-  const r = Math.round(size * 0.25)
-  return (
-    <svg width={size} height={size} viewBox="0 0 64 64" style={{ borderRadius: r, flexShrink: 0 }}>
-      <defs>
-        <linearGradient id="am-bg" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#FFAD33" />
-          <stop offset="100%" stopColor="#E68600" />
-        </linearGradient>
-      </defs>
-      <rect width="64" height="64" rx={r * 2} fill="url(#am-bg)" />
-      <path d="M14 44 A22 22 0 0 1 50 44" fill="none" stroke="#0D1117" strokeWidth="2" opacity="0.35" />
-      <path d="M20 44 A16 16 0 0 1 44 44" fill="none" stroke="#0D1117" strokeWidth="2" opacity="0.5" />
-      <path d="M26 44 A10 10 0 0 1 38 44" fill="none" stroke="#0D1117" strokeWidth="2" opacity="0.7" />
-      <rect x="30" y="44" width="4" height="10" fill="#0D1117" />
-      <rect x="22" y="52" width="20" height="4" rx="1" fill="#0D1117" />
-      <path d="M32 44 L46 22" stroke="#0D1117" strokeWidth="2.4" strokeLinecap="round" />
-      <circle cx="46" cy="22" r="2.4" fill="#fff" />
-    </svg>
   )
 }

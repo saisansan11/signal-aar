@@ -4,7 +4,7 @@ import { T } from '../tokens'
 import { Card, Stencil, MIcon, HUDGrid, PrimaryBtn, GhostBtn } from '../components/ui'
 import { getCourses } from '../services/courseService'
 import { getBatchesByCourse } from '../services/batchService'
-import { createSession } from '../services/liveSessionService'
+import { createSession, updateSessionStatus } from '../services/liveSessionService'
 import { addQuestion } from '../services/questionService'
 import type { Course, Batch, QuestionType } from '../models'
 
@@ -78,7 +78,6 @@ export default function CreateSessionPage() {
         await addQuestion({ sessionId: session.sessionId, text: q.text, type: q.type, options: q.options, order: i + 1, isActive: false })
       }
       if (startNow) {
-        const { updateSessionStatus } = await import('../services/liveSessionService')
         await updateSessionStatus(session.sessionId, 'active')
       }
       nav(`/sessions/${session.sessionId}/dashboard`)

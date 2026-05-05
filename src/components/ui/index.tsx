@@ -1,4 +1,4 @@
-import type { ReactNode, CSSProperties } from 'react'
+import type { ReactNode, CSSProperties, MouseEventHandler } from 'react'
 import { T } from '../../tokens'
 
 // ── Stencil label ──────────────────────────────────────────────────
@@ -18,7 +18,7 @@ export function Card({
   children, padding = 20, accent, glow, style, onClick, className,
 }: {
   children: ReactNode; padding?: number; accent?: string; glow?: string
-  style?: CSSProperties; onClick?: () => void; className?: string
+  style?: CSSProperties; onClick?: MouseEventHandler<HTMLDivElement>; className?: string
 }) {
   return (
     <div
