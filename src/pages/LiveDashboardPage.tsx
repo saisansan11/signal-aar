@@ -15,6 +15,7 @@ import { createIssue } from '../services/issueService'
 import { seedDemoData, USE_MOCK } from '../services'
 import type { LiveSession, Question, Response, ThemeCluster } from '../models'
 import { countOptionResponses, averageRating } from '../utils/percentages'
+import { useDebounce, useLocalStorage } from '../utils/hooks'
 
 // ─── constants ───────────────────────────────────────────────────
 const CHART_COLORS = [T.primary, T.accentBlue, T.success, T.es, T.ep, T.ea, T.spectrum, T.radar]
@@ -65,13 +66,14 @@ function useAnimatedNumber(value: number) {
 
 // ─── BubbleCloud ─────────────────────────────────────────────────
 function BubbleCloud({
-  clusters, selected, onSelect, large = false, focusId,
+  clusters, selected, onSelect, large = false, focusId, animate = true,
 }: {
   clusters: ThemeCluster[]
   selected: ThemeCluster | null
   onSelect: (cl: ThemeCluster | null) => void
   large?: boolean
-  focusId?: string | null          // auto-highlighted cluster
+  focusId?: string | null
+  animate?: boolean
 }) {
   const [pulseIds, setPulseIds] = useState<Set<string>>(new Set())
   const prevCounts = useRef<Record<string, number>>({})
@@ -116,7 +118,7 @@ function BubbleCloud({
             type="button"
             onClick={() => onSelect(active ? null : cl)}
             title={`${cl.themeTitle} — ${cl.count} คน (${cl.percentage}%)`}
-            className={`relative rounded-full flex flex-col items-center justify-center font-semibold select-none ${pulsing ? 'anim-bubble-pulse' : ''}`}
+            className={`relative rounded-full flex flex-col items-center justify-center font-semibold select-none ${animate && pulsing ? 'anim-bubble-pulse' : ''}`}
             style={{
               width: size, height: size,
               fontSize: fs, lineHeight: 1.25,
@@ -198,14 +200,17 @@ function InsightBanner({ cluster, totalCount }: { cluster: ThemeCluster; totalCo
 
 // ─── AnimatedCounter ─────────────────────────────────────────────
 function AnimatedCounter({
-  value, color = T.fg1, size = 36, suffix = '',
+  value, color = T.fg1, size = 36, suffix = '', animate = true,
 }: {
-  value: number | string; color?: string; size?: number; suffix?: string
+  value: number | string; color?: string; size?: number; suffix?: string; animate?: boolean
 }) {
   const flipKey = useAnimatedNumber(typeof value === 'number' ? value : 0)
   return (
-    <span key={flipKey} className="anim-count-flip inline-block"
-      style={{ fontSize: size, fontWeight: 700, color, lineHeight: 1, fontFamily: 'inherit' }}>
+    <span
+      key={animate ? flipKey : undefined}
+      className={animate ? 'anim-count-flip inline-block' : 'inline-block'}
+      style={{ fontSize: size, fontWeight: 700, color, lineHeight: 1, fontFamily: 'inherit' }}
+    >
       {value}{suffix}
     </span>
   )
@@ -456,26 +461,41 @@ export default function LiveDashboardPage() {
   const { sessionId } = useParams<{ sessionId: string }>()
   const nav = useNavigate()
 
-  const [session,         setSession]         = useState<LiveSession | null>(null)
-  const [questions,       setQuestions]       = useState<Question[]>([])
-  const [allResponses,    setAllResponses]    = useState<Response[]>([])
-  const [activeResponses, setActiveResponses] = useState<Response[]>([])
-  const [clusters,        setClusters]        = useState<ThemeCluster[]>([])
-  const [selectedCluster, setSelectedCluster] = useState<ThemeCluster | null>(null)
-  const [issuedIds,       setIssuedIds]       = useState<Set<string>>(new Set())
-  const [showQR,          setShowQR]          = useState(false)
-  const [presMode,        setPresMode]        = useState(false)
-  const [seedBusy,        setSeedBusy]        = useState(false)
-  const [seedMsg,         setSeedMsg]         = useState('')
-  const [showSummary,     setShowSummary]     = useState(false)
+  const [session,          setSession]          = useState<LiveSession | null>(null)
+  const [questions,        setQuestions]        = useState<Question[]>([])
+  const [allResponsesRaw,  setAllResponsesRaw]  = useState<Response[]>([])
+  const [activeRespRaw,    setActiveRespRaw]    = useState<Response[]>([])
+  const [clusters,         setClusters]         = useState<ThemeCluster[]>([])
+  const [selectedCluster,  setSelectedCluster]  = useState<ThemeCluster | null>(null)
+  const [issuedIds,        setIssuedIds]        = useState<Set<string>>(new Set())
+  const [showQR,           setShowQR]           = useState(false)
+  const [presMode,         setPresMode]         = useState(false)
+  const [seedBusy,         setSeedBusy]         = useState(false)
+  const [seedMsg,          setSeedMsg]          = useState('')
+  const [showSummary,      setShowSummary]      = useState(false)
+  const [listenerError,    setListenerError]    = useState<string | null>(null)
   const presRef = useRef<HTMLDivElement>(null)
+
+  // ── Debounce response arrays (150 ms) to batch rapid Firestore writes ──
+  const allResponses    = useDebounce(allResponsesRaw,  150)
+  const activeResponses = useDebounce(activeRespRaw,    150)
+
+  // ── localStorage: remember last session for quick recovery ────────
+  const [, setLastSession] = useLocalStorage<string>('aar:lastSession', '')
 
   // ── subscriptions ───────────────────────────────────────────
   useEffect(() => {
     if (!sessionId) return
-    const u1 = subscribeToSession(sessionId, setSession)
-    const u2 = subscribeToQuestions(sessionId, setQuestions)
-    const u3 = subscribeToAllSessionResponses(sessionId, setAllResponses)
+    setListenerError(null)
+    const onErr = (err: { message: string }) =>
+      setListenerError(`การเชื่อมต่อ Firestore ขัดข้อง: ${err.message}`)
+
+    const u1 = subscribeToSession(sessionId, s => {
+      setSession(s)
+      if (s) setLastSession(s.sessionId)
+    }, { onError: onErr })
+    const u2 = subscribeToQuestions(sessionId, setQuestions, { onError: onErr })
+    const u3 = subscribeToAllSessionResponses(sessionId, setAllResponsesRaw, { onError: onErr })
     return () => { u1(); u2(); u3() }
   }, [sessionId])
 
@@ -484,10 +504,13 @@ export default function LiveDashboardPage() {
   useEffect(() => {
     if (!sessionId || !activeQ) return
     setSelectedCluster(null)
+    const onErr = (err: { message: string }) =>
+      setListenerError(`ไม่สามารถรับคำตอบ: ${err.message}`)
+
     const u = subscribeToResponses(sessionId, activeQ.questionId, rs => {
-      setActiveResponses(rs)
+      setActiveRespRaw(rs)
       setClusters(activeQ.type === 'openText' ? clusterResponses(rs, sessionId, activeQ.questionId) : [])
-    })
+    }, { onError: onErr })
     return u
   }, [sessionId, activeQ?.questionId])
 
@@ -563,6 +586,9 @@ export default function LiveDashboardPage() {
 
   // Auto focus: top cluster by percentage
   const focusCluster = clusters.length ? clusters[0] : null
+
+  // Disable heavy animations when crowd is large (prevents layout thrash)
+  const animEnabled = totalResponders <= 50
 
   // ── Shared QR overlay ───────────────────────────────────────
   const QROverlay = showQR ? (
@@ -759,7 +785,7 @@ export default function LiveDashboardPage() {
                 <div key={s.label} className="relative p-4 rounded-2xl flex flex-col items-center"
                   style={{ background: s.color + '12', border: `1px solid ${s.color}30` }}>
                   <MIcon name={s.icon} size={20} color={s.color} fill={1} />
-                  <AnimatedCounter value={s.value} color={s.color} size={48} suffix={s.suffix} />
+                  <AnimatedCounter value={s.value} color={s.color} size={48} suffix={s.suffix} animate={animEnabled} />
                   <Stencil color={s.color + 'AA'} className="mt-1">{s.label}</Stencil>
                 </div>
               ))}
@@ -793,6 +819,44 @@ export default function LiveDashboardPage() {
       {QROverlay}
       <div className="relative min-h-screen" style={{ background: T.bg }}>
         <HUDGrid opacity={0.03} />
+
+        {/* ── Reconnect error banner ─────────────────────────── */}
+        {listenerError && (
+          <div
+            className="relative z-20 flex items-center gap-3 px-6 py-2.5"
+            style={{ background: T.error + '18', borderBottom: `1px solid ${T.error}50` }}
+          >
+            <span className="w-2 h-2 rounded-full animate-live-pulse shrink-0"
+              style={{ background: T.error }} />
+            <p className="text-[12px] font-semibold flex-1" style={{ color: T.error }}>
+              ⚠ {listenerError}
+            </p>
+            <button
+              type="button"
+              onClick={() => { setListenerError(null); window.location.reload() }}
+              className="text-[11px] px-3 py-1 rounded-lg font-semibold hover:opacity-80"
+              style={{ background: T.error + '30', color: T.error }}
+            >
+              เชื่อมต่อใหม่
+            </button>
+            <button type="button" onClick={() => setListenerError(null)}
+              title="ปิด" aria-label="ปิดแจ้งเตือน"
+              className="p-1 rounded hover:opacity-70">
+              <MIcon name="close" size={14} color={T.error} />
+            </button>
+          </div>
+        )}
+
+        {/* ── Animation throttle notice (> 50 responders) ──── */}
+        {!animEnabled && (
+          <div className="relative z-10 flex items-center gap-2 px-6 py-1.5"
+            style={{ background: T.warning + '12', borderBottom: `1px solid ${T.warning}30` }}>
+            <MIcon name="speed" size={13} color={T.warning} />
+            <p className="text-[11px]" style={{ color: T.warning }}>
+              Performance mode — animations paused ({totalResponders} responders)
+            </p>
+          </div>
+        )}
 
         {/* Top bar */}
         <header className="relative flex items-center gap-3 px-6 py-3 border-b"
@@ -960,7 +1024,7 @@ export default function LiveDashboardPage() {
                 <Card key={s.label} padding={14} className="flex flex-col items-center">
                   <Stencil>{s.label}</Stencil>
                   <div className="mt-1">
-                    <AnimatedCounter value={s.value} color={s.color} size={36} suffix={s.suffix} />
+                    <AnimatedCounter value={s.value} color={s.color} size={36} suffix={s.suffix} animate={animEnabled} />
                   </div>
                 </Card>
               ))}
@@ -976,7 +1040,7 @@ export default function LiveDashboardPage() {
                   <span className="text-[10px]" style={{ color: T.fg3 }}>{clusters.length} themes</span>
                 </div>
                 <BubbleCloud clusters={clusters} selected={selectedCluster}
-                  onSelect={setSelectedCluster} focusId={focusCluster?.clusterId} />
+                  onSelect={setSelectedCluster} focusId={focusCluster?.clusterId} animate={animEnabled} />
                 <div className="flex flex-col gap-2 mt-3">
                   {clusters.map(cl => {
                     const color  = CAT_COLOR[cl.category] ?? T.accentPurple

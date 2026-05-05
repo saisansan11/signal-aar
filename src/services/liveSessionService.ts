@@ -1,6 +1,6 @@
 import {
   collection, getDocs, addDoc, updateDoc, doc, query,
-  where, onSnapshot, serverTimestamp, getDoc,
+  where, onSnapshot, serverTimestamp, getDoc, FirestoreError,
 } from 'firebase/firestore'
 import { db, USE_MOCK } from './firebase'
 import { MOCK_SESSIONS } from './mockData'
@@ -8,6 +8,10 @@ import type { LiveSession, SessionStatus } from '../models'
 import { newId } from '../utils/id'
 import { nowIso } from '../utils/dateFormat'
 import { generateJoinCode } from '../utils/joinCode'
+
+export interface ListenerOptions {
+  onError?: (err: FirestoreError) => void
+}
 
 export async function getAllSessions(): Promise<LiveSession[]> {
   if (USE_MOCK) return [...MOCK_SESSIONS]
@@ -17,7 +21,11 @@ export async function getAllSessions(): Promise<LiveSession[]> {
 
 export async function getSessionByCode(code: string): Promise<LiveSession | null> {
   if (USE_MOCK) return MOCK_SESSIONS.find(s => s.joinCode === code.toUpperCase()) ?? null
-  const q = query(collection(db!, 'liveSessions'), where('joinCode', '==', code.toUpperCase()), where('status', '==', 'active'))
+  const q = query(
+    collection(db!, 'liveSessions'),
+    where('joinCode', '==', code.toUpperCase()),
+    where('status', '==', 'active'),
+  )
   const snap = await getDocs(q)
   if (snap.empty) return null
   const d = snap.docs[0]
@@ -32,7 +40,9 @@ export async function getSessionById(sessionId: string): Promise<LiveSession | n
   return { ...snap.data(), sessionId: snap.id } as LiveSession
 }
 
-export async function createSession(data: Omit<LiveSession, 'sessionId' | 'joinCode' | 'createdAt' | 'closedAt' | 'status' | 'currentQuestionId'>): Promise<LiveSession> {
+export async function createSession(
+  data: Omit<LiveSession, 'sessionId' | 'joinCode' | 'createdAt' | 'closedAt' | 'status' | 'currentQuestionId'>,
+): Promise<LiveSession> {
   const session: LiveSession = {
     ...data,
     sessionId: newId('s'),
@@ -43,7 +53,7 @@ export async function createSession(data: Omit<LiveSession, 'sessionId' | 'joinC
     closedAt: null,
   }
   if (!USE_MOCK) {
-    const { sessionId: _sessionId, ...payload } = session
+    const { sessionId: _id, ...payload } = session
     const ref = await addDoc(collection(db!, 'liveSessions'), { ...payload, createdAt: serverTimestamp() })
     return { ...session, sessionId: ref.id }
   }
@@ -51,7 +61,11 @@ export async function createSession(data: Omit<LiveSession, 'sessionId' | 'joinC
   return session
 }
 
-export async function updateSessionStatus(sessionId: string, status: SessionStatus, currentQuestionId?: string | null): Promise<void> {
+export async function updateSessionStatus(
+  sessionId: string,
+  status: SessionStatus,
+  currentQuestionId?: string | null,
+): Promise<void> {
   const update: Partial<LiveSession> = { status }
   if (currentQuestionId !== undefined) update.currentQuestionId = currentQuestionId
   if (status === 'closed') update.closedAt = nowIso()
@@ -64,12 +78,21 @@ export async function updateSessionStatus(sessionId: string, status: SessionStat
   await updateDoc(doc(db!, 'liveSessions', sessionId), update)
 }
 
-export function subscribeToSession(sessionId: string, cb: (s: LiveSession | null) => void): () => void {
+export function subscribeToSession(
+  sessionId: string,
+  cb: (s: LiveSession | null) => void,
+  opts: ListenerOptions = {},
+): () => void {
   if (USE_MOCK) {
     cb(MOCK_SESSIONS.find(s => s.sessionId === sessionId) ?? null)
     return () => {}
   }
-  return onSnapshot(doc(db!, 'liveSessions', sessionId), snap => {
-    cb(snap.exists() ? { ...snap.data(), sessionId: snap.id } as LiveSession : null)
-  })
+  return onSnapshot(
+    doc(db!, 'liveSessions', sessionId),
+    snap => cb(snap.exists() ? { ...snap.data(), sessionId: snap.id } as LiveSession : null),
+    err => {
+      console.error('[subscribeToSession]', err)
+      opts.onError?.(err)
+    },
+  )
 }
