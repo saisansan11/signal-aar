@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell } from 'recharts'
 import { QRCodeSVG } from 'qrcode.react'
+import html2canvas from 'html2canvas'
 import { T } from '../tokens'
 import {
   Card, Stencil, MIcon, HUDGrid, Chip, LivePulse,
@@ -10,12 +11,15 @@ import {
 import { subscribeToSession, updateSessionStatus } from '../services/liveSessionService'
 import { subscribeToQuestions, setActiveQuestion } from '../services/questionService'
 import { subscribeToResponses, subscribeToAllSessionResponses } from '../services/responseService'
+import { clusterOpenTextResponses } from '../services/aiClusteringService'
 import { clusterResponses } from '../services/themeClusteringService'
 import { createIssue } from '../services/issueService'
 import { seedDemoData, USE_MOCK } from '../services'
 import type { LiveSession, Question, Response, ThemeCluster } from '../models'
 import { countOptionResponses, averageRating } from '../utils/percentages'
 import { useDebounce, useLocalStorage } from '../utils/hooks'
+
+type ChoiceDatum = { option: string; count: number; pct: number }
 
 // ─── constants ───────────────────────────────────────────────────
 const CHART_COLORS = [T.primary, T.accentBlue, T.success, T.es, T.ep, T.ea, T.spectrum, T.radar]
@@ -31,6 +35,10 @@ const CAT_ICON: Record<string, string> = {
   content: 'menu_book', practice: 'fitness_center', assessment: 'quiz',
   location: 'location_on', safety: 'shield', other: 'help',
 }
+
+const AUTO_ROTATE_MS = 15_000
+const DECISION_TIMER_MS = 12_000
+const INTERACTION_PAUSE_MS = 20_000
 
 // Suggested corrective actions per category
 const SUGGESTED_ACTIONS: Record<string, string[]> = {
@@ -474,7 +482,24 @@ export default function LiveDashboardPage() {
   const [seedMsg,          setSeedMsg]          = useState('')
   const [showSummary,      setShowSummary]      = useState(false)
   const [listenerError,    setListenerError]    = useState<string | null>(null)
+  const [autoRotateEnabled, setAutoRotateEnabled] = useLocalStorage<boolean>('aar:pres:auto-rotate', true)
+  const [decisionTimerEnabled, setDecisionTimerEnabled] = useLocalStorage<boolean>('aar:pres:decision-timer', true)
+  const [autoRotatePausedUntil, setAutoRotatePausedUntil] = useState(0)
+  const [decisionDeadline, setDecisionDeadline] = useState<number | null>(null)
+  const [decisionFrozenQuestionId, setDecisionFrozenQuestionId] = useState<string | null>(null)
+  const [frozenActiveResponses, setFrozenActiveResponses] = useState<Response[]>([])
+  const [frozenClusters, setFrozenClusters] = useState<ThemeCluster[]>([])
+  const [frozenChartData, setFrozenChartData] = useState<ChoiceDatum[]>([])
+  const [frozenAvgRating, setFrozenAvgRating] = useState<number | null>(null)
+  const [snapshotBusy, setSnapshotBusy] = useState(false)
+  const [snapshotError, setSnapshotError] = useState<string | null>(null)
+  const [nowMs, setNowMs] = useState(() => Date.now())
   const presRef = useRef<HTMLDivElement>(null)
+  const dashboardRef = useRef<HTMLDivElement>(null)
+  const activeResponsesRef = useRef<Response[]>([])
+  const clustersRef = useRef<ThemeCluster[]>([])
+  const chartDataRef = useRef<ChoiceDatum[]>([])
+  const avgRatingRef = useRef<number | null>(null)
 
   // ── Debounce response arrays (150 ms) to batch rapid Firestore writes ──
   const allResponses    = useDebounce(allResponsesRaw,  150)
@@ -504,15 +529,40 @@ export default function LiveDashboardPage() {
   useEffect(() => {
     if (!sessionId || !activeQ) return
     setSelectedCluster(null)
+    let disposed = false
+    let aiRun = 0
     const onErr = (err: { message: string }) =>
       setListenerError(`ไม่สามารถรับคำตอบ: ${err.message}`)
 
     const u = subscribeToResponses(sessionId, activeQ.questionId, rs => {
       setActiveRespRaw(rs)
-      setClusters(activeQ.type === 'openText' ? clusterResponses(rs, sessionId, activeQ.questionId) : [])
+      if (activeQ.type !== 'openText') {
+        setClusters([])
+        return
+      }
+
+      const fallbackClusters = clusterResponses(rs, sessionId, activeQ.questionId)
+      const runId = ++aiRun
+      setClusters(fallbackClusters)
+      void clusterOpenTextResponses(rs, sessionId, activeQ.questionId, activeQ.type).then(nextClusters => {
+        if (!disposed && runId === aiRun) setClusters(nextClusters)
+      })
     }, { onError: onErr })
-    return u
+    return () => {
+      disposed = true
+      u()
+    }
   }, [sessionId, activeQ?.questionId])
+
+  useEffect(() => {
+    activeResponsesRef.current = activeResponses
+    clustersRef.current = clusters
+  }, [activeResponses, clusters])
+
+  const registerPresentationInteraction = useCallback(() => {
+    if (!presMode) return
+    setAutoRotatePausedUntil(Date.now() + INTERACTION_PAUSE_MS)
+  }, [presMode])
 
   // ── keyboard shortcuts ──────────────────────────────────────
   useEffect(() => {
@@ -522,16 +572,17 @@ export default function LiveDashboardPage() {
       if (e.key === 'Escape')  { setShowQR(false); setPresMode(false) }
       if ((e.key === 'p' || e.key === 'P') && !e.ctrlKey && !e.metaKey) setPresMode(v => !v)
       if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey) toggleFullscreen()
-      if ((e.key === 'q' || e.key === 'Q') && !e.ctrlKey && !e.metaKey) setShowQR(v => !v)
-      if ((e.key === 's' || e.key === 'S') && !e.ctrlKey && !e.metaKey) setShowSummary(v => !v)
+      if ((e.key === 'q' || e.key === 'Q') && !e.ctrlKey && !e.metaKey) { registerPresentationInteraction(); setShowQR(v => !v) }
+      if ((e.key === 's' || e.key === 'S') && !e.ctrlKey && !e.metaKey) { registerPresentationInteraction(); setShowSummary(v => !v) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [registerPresentationInteraction, toggleFullscreen])
 
   // ── actions ─────────────────────────────────────────────────
-  async function activateQuestion(qId: string) {
+  async function activateQuestion(qId: string, options?: { causedByInteraction?: boolean }) {
     if (!sessionId) return
+    if (options?.causedByInteraction) registerPresentationInteraction()
     if (activeQ) await setActiveQuestion(activeQ.questionId, false)
     await setActiveQuestion(qId, true)
     await updateSessionStatus(sessionId, 'active', qId)
@@ -570,10 +621,10 @@ export default function LiveDashboardPage() {
     setSeedBusy(false)
   }
 
-  const toggleFullscreen = useCallback(() => {
+  function toggleFullscreen() {
     if (!document.fullscreenElement) presRef.current?.requestFullscreen?.()
     else document.exitFullscreen?.()
-  }, [])
+  }
 
   // ── derived ─────────────────────────────────────────────────
   const totalResponders = new Set(allResponses.map(r => r.studentAlias)).size
@@ -581,14 +632,121 @@ export default function LiveDashboardPage() {
   const chartData = activeQ && (activeQ.type === 'multipleChoice' || activeQ.type === 'yesNo')
     ? countOptionResponses(activeResponses, activeQ.options) : []
   const avgRating = activeQ?.type === 'rating' ? averageRating(activeResponses) : null
-  const respPct   = totalResponders > 0 ? Math.round((activeResponses.length / totalResponders) * 100) : 0
   const qIdx      = questions.findIndex(q => q.questionId === activeQ?.questionId)
+  const qNumber   = qIdx >= 0 ? qIdx + 1 : 0
 
-  // Auto focus: top cluster by percentage
-  const focusCluster = clusters.length ? clusters[0] : null
+  const goToNextQuestion = useCallback(async () => {
+    if (!activeQ || questions.length < 2) return
+    const nextQuestion = questions[(qIdx + 1) % questions.length]
+    if (!nextQuestion || nextQuestion.questionId === activeQ.questionId) return
+    await activateQuestion(nextQuestion.questionId)
+  }, [activeQ, qIdx, questions])
+
+  useEffect(() => {
+    chartDataRef.current = chartData
+    avgRatingRef.current = avgRating
+  }, [chartData, avgRating])
+
+  const decisionFrozen = presMode && !!activeQ && decisionFrozenQuestionId === activeQ.questionId
+  const displayActiveResponses = decisionFrozen ? frozenActiveResponses : activeResponses
+  const displayClusters = decisionFrozen ? frozenClusters : clusters
+  const displayChartData = decisionFrozen ? frozenChartData : chartData
+  const displayAvgRating = decisionFrozen ? frozenAvgRating : avgRating
+  const displayRespPct = totalResponders > 0 ? Math.round((displayActiveResponses.length / totalResponders) * 100) : 0
+  const focusCluster = displayClusters.length ? displayClusters[0] : null
+  const decisionCountdownMs = decisionTimerEnabled && decisionDeadline
+    ? Math.max(0, decisionDeadline - nowMs)
+    : 0
+  const decisionCountdownSeconds = Math.ceil(decisionCountdownMs / 1000)
+  const rotatePaused = autoRotatePausedUntil > nowMs
+  const rotateResumeSeconds = Math.ceil(Math.max(0, autoRotatePausedUntil - nowMs) / 1000)
+  const hasActiveQuestion = !!activeQ && qIdx >= 0
 
   // Disable heavy animations when crowd is large (prevents layout thrash)
   const animEnabled = totalResponders <= 50
+
+  useEffect(() => {
+    if (!presMode || (!autoRotateEnabled && !decisionTimerEnabled)) return
+    const ticker = window.setInterval(() => setNowMs(Date.now()), 250)
+    return () => window.clearInterval(ticker)
+  }, [autoRotateEnabled, decisionTimerEnabled, presMode])
+
+  useEffect(() => {
+    if (!presMode || !activeQ || session?.status !== 'active') {
+      setDecisionDeadline(null)
+      setDecisionFrozenQuestionId(null)
+      setFrozenActiveResponses([])
+      setFrozenClusters([])
+      setFrozenChartData([])
+      setFrozenAvgRating(null)
+      return
+    }
+
+    setDecisionFrozenQuestionId(null)
+    setFrozenActiveResponses([])
+    setFrozenClusters([])
+    setFrozenChartData([])
+    setFrozenAvgRating(null)
+    setDecisionDeadline(decisionTimerEnabled ? Date.now() + DECISION_TIMER_MS : null)
+  }, [activeQ?.questionId, decisionTimerEnabled, presMode, session?.status])
+
+  useEffect(() => {
+    if (!presMode || !decisionTimerEnabled || !activeQ || !decisionDeadline || decisionFrozen) return
+    if (nowMs < decisionDeadline) return
+
+    setDecisionFrozenQuestionId(activeQ.questionId)
+    setFrozenActiveResponses(activeResponsesRef.current)
+    setFrozenClusters(clustersRef.current)
+    setFrozenChartData(chartDataRef.current)
+    setFrozenAvgRating(avgRatingRef.current)
+  }, [activeQ, decisionDeadline, decisionFrozen, decisionTimerEnabled, nowMs, presMode])
+
+  useEffect(() => {
+    if (!presMode || !autoRotateEnabled || !hasActiveQuestion || rotatePaused || questions.length < 2 || session?.status !== 'active') return
+    const timer = window.setTimeout(() => {
+      void goToNextQuestion()
+    }, AUTO_ROTATE_MS)
+    return () => window.clearTimeout(timer)
+  }, [autoRotateEnabled, goToNextQuestion, hasActiveQuestion, presMode, questions.length, rotatePaused, session?.status, activeQ?.questionId])
+
+  async function handleSnapshot() {
+    const target = presMode ? presRef.current : dashboardRef.current
+    if (snapshotBusy) return
+    if (!target) {
+      setSnapshotError('Snapshot target is not ready yet')
+      return
+    }
+    registerPresentationInteraction()
+    setSnapshotBusy(true)
+    setSnapshotError(null)
+    const restoreSummary = showSummary
+
+    try {
+      if (!showSummary) {
+        setShowSummary(true)
+        await new Promise(resolve => window.setTimeout(resolve, 120))
+      }
+
+      const canvas = await html2canvas(target, {
+        backgroundColor: T.bg,
+        scale: Math.min(window.devicePixelRatio || 1, 2),
+        useCORS: true,
+        logging: false,
+      })
+
+      const link = document.createElement('a')
+      const questionLabel = activeQ && qNumber > 0 ? `q${qNumber}` : 'overview'
+      link.download = `signal-aar-${session?.joinCode ?? 'session'}-${questionLabel}.png`
+      link.href = canvas.toDataURL('image/png')
+      link.click()
+    } catch (err) {
+      console.error('[snapshot]', err)
+      setSnapshotError(err instanceof Error ? err.message : 'Snapshot capture failed')
+    } finally {
+      if (!restoreSummary) setShowSummary(false)
+      setSnapshotBusy(false)
+    }
+  }
 
   // ── Shared QR overlay ───────────────────────────────────────
   const QROverlay = showQR ? (
@@ -637,6 +795,20 @@ export default function LiveDashboardPage() {
               </div>
             </div>
             <div className="flex items-center gap-2">
+              <div className="hidden xl:flex items-center gap-2 px-3 py-1.5 rounded-xl"
+                style={{ background: T.primary + '12', border: `1px solid ${T.primary}30` }}>
+                <MIcon name={autoRotateEnabled ? 'autoplay' : 'pause_circle'} size={14} color={T.primary} fill={1} />
+                <span className="text-[10px] font-semibold" style={{ color: T.fg2 }}>
+                  {autoRotateEnabled ? (rotatePaused ? `Auto pause ${rotateResumeSeconds}s` : 'Auto rotate 15s') : 'Auto rotate off'}
+                </span>
+              </div>
+              <div className="hidden xl:flex items-center gap-2 px-3 py-1.5 rounded-xl"
+                style={{ background: T.warning + '12', border: `1px solid ${T.warning}30` }}>
+                <MIcon name={decisionFrozen ? 'timer_off' : 'timer'} size={14} color={T.warning} fill={1} />
+                <span className="text-[10px] font-semibold" style={{ color: T.fg2 }}>
+                  {decisionTimerEnabled ? (decisionFrozen ? 'Results frozen' : `${decisionCountdownSeconds}s left`) : 'Timer off'}
+                </span>
+              </div>
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl"
                 style={{ background: T.accentBlue + '15', border: `1px solid ${T.accentBlue}30` }}>
                 <MIcon name="group" size={14} color={T.accentBlue} fill={1} />
@@ -646,13 +818,16 @@ export default function LiveDashboardPage() {
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl"
                 style={{ background: T.success + '15', border: `1px solid ${T.success}30` }}>
                 <MIcon name="done" size={14} color={T.success} fill={1} />
-                <AnimatedCounter value={activeResponses.length} color={T.success} size={15} />
+                <AnimatedCounter value={displayActiveResponses.length} color={T.success} size={15} />
                 <span className="text-[10px]" style={{ color: T.fg3 }}>ตอบ</span>
               </div>
               <span className="hidden lg:block text-[10px]" style={{ color: T.fg3 }}>P·F·Q·S·Esc</span>
-              <GhostBtn onClick={() => setShowSummary(v => !v)} icon="summarize" size="sm">Summary</GhostBtn>
-              <GhostBtn onClick={() => setShowQR(true)} icon="qr_code" size="sm">QR</GhostBtn>
-              <GhostBtn onClick={toggleFullscreen} icon="fullscreen" size="sm">Full</GhostBtn>
+              <GhostBtn onClick={() => { registerPresentationInteraction(); setAutoRotateEnabled(!autoRotateEnabled) }} icon={autoRotateEnabled ? 'pause_circle' : 'autoplay'} size="sm">Auto</GhostBtn>
+              <GhostBtn onClick={() => { registerPresentationInteraction(); setDecisionTimerEnabled(!decisionTimerEnabled) }} icon={decisionTimerEnabled ? 'timer' : 'timer_off'} size="sm">Timer</GhostBtn>
+              <GhostBtn onClick={() => { registerPresentationInteraction(); setShowSummary(v => !v) }} icon="summarize" size="sm">Summary</GhostBtn>
+              <GhostBtn onClick={() => { registerPresentationInteraction(); void handleSnapshot() }} icon="photo_camera" size="sm">{snapshotBusy ? 'Saving...' : 'Snapshot'}</GhostBtn>
+              <GhostBtn onClick={() => { registerPresentationInteraction(); setShowQR(true) }} icon="qr_code" size="sm">QR</GhostBtn>
+              <GhostBtn onClick={() => { registerPresentationInteraction(); toggleFullscreen() }} icon="fullscreen" size="sm">Full</GhostBtn>
               <button type="button" onClick={() => setPresMode(false)}
                 className="px-3 py-1.5 rounded-xl text-[12px] font-semibold flex items-center gap-1.5 hover:opacity-80"
                 style={{ background: T.error + '18', color: T.error, border: `1px solid ${T.error}40` }}>
@@ -661,6 +836,20 @@ export default function LiveDashboardPage() {
             </div>
           </header>
 
+          {(listenerError || snapshotError) && (
+            <div className="relative z-10 flex items-center gap-3 px-8 py-2"
+              style={{ background: T.error + '14', borderBottom: `1px solid ${T.error}35` }}>
+              <MIcon name={listenerError ? 'wifi_off' : 'photo_camera'} size={15} color={T.error} />
+              <p className="text-[12px] font-semibold flex-1" style={{ color: T.error }}>
+                {listenerError ?? `Snapshot failed: ${snapshotError}`}
+              </p>
+              <button type="button" onClick={() => { setListenerError(null); setSnapshotError(null) }}
+                className="p-1 rounded hover:opacity-70">
+                <MIcon name="close" size={14} color={T.error} />
+              </button>
+            </div>
+          )}
+
           {/* Pres 3-column */}
           <div className="relative flex-1 grid grid-cols-1 lg:grid-cols-[280px_1fr_280px] overflow-hidden">
 
@@ -668,14 +857,14 @@ export default function LiveDashboardPage() {
             <div className="flex flex-col gap-4 p-5 border-r overflow-y-auto"
               style={{ borderColor: T.border + '60' }}>
               <div>
-                <Stencil color={T.fg3} className="mb-3">Q {qIdx + 1} / {questions.length}</Stencil>
+                <Stencil color={T.fg3} className="mb-3">Q {qNumber || '-'} / {questions.length}</Stencil>
                 <div className="flex flex-col gap-2">
                   {questions.map((q, i) => {
                     const isCurr = q.questionId === activeQ?.questionId
                     const cnt = allResponses.filter(r => r.questionId === q.questionId).length
                     return (
                       <div key={q.questionId}
-                        onClick={() => session?.status === 'active' && activateQuestion(q.questionId)}
+                        onClick={() => session?.status === 'active' && activateQuestion(q.questionId, { causedByInteraction: true })}
                         className="p-2.5 rounded-xl cursor-pointer transition-all"
                         style={{ background: isCurr ? T.primary + '18' : T.surfaceLight, border: `1px solid ${isCurr ? T.primary + '60' : T.border}`, opacity: isCurr ? 1 : 0.65 }}>
                         <div className="flex items-center justify-between">
@@ -690,7 +879,7 @@ export default function LiveDashboardPage() {
               </div>
 
               {/* Trend mini */}
-              <TrendPanel currentResponders={totalResponders} avgRatingVal={avgRating} clusters={clusters} />
+              <TrendPanel currentResponders={totalResponders} avgRatingVal={displayAvgRating} clusters={displayClusters} />
 
               {/* QR */}
               <div className="relative flex flex-col items-center gap-3 p-4 rounded-2xl mt-auto"
@@ -710,7 +899,7 @@ export default function LiveDashboardPage() {
               {/* Insight banner (auto focus) */}
               {focusCluster && activeQ?.type === 'openText' && (
                 <div className="w-full max-w-2xl">
-                  <InsightBanner cluster={focusCluster} totalCount={activeResponses.length} />
+                  <InsightBanner cluster={focusCluster} totalCount={displayActiveResponses.length} />
                 </div>
               )}
 
@@ -718,56 +907,105 @@ export default function LiveDashboardPage() {
               {showSummary && (
                 <div className="w-full max-w-2xl">
                   <CommanderSummary session={session} totalResponders={totalResponders}
-                    activeResponses={activeResponses} clusters={clusters}
-                    avgRating={avgRating} chartData={chartData} />
+                    activeResponses={displayActiveResponses} clusters={displayClusters}
+                    avgRating={displayAvgRating} chartData={displayChartData} />
+                </div>
+              )}
+
+              {!activeQ && (
+                <div className="flex flex-col items-center justify-center gap-3 py-20 text-center">
+                  <MIcon name="hourglass_empty" size={54} color={T.fg3} />
+                  <p className="text-[18px] font-semibold" style={{ color: T.fg2 }}>No active question</p>
+                  <p className="text-[12px]" style={{ color: T.fg3 }}>Start a session or select a question to show live results.</p>
                 </div>
               )}
 
               {activeQ && (
                 <>
+                  <div className="w-full max-w-2xl">
+                    <div className="flex items-center justify-between gap-4 mb-2">
+                      <Stencil color={decisionFrozen ? T.warning : T.primary}>
+                        {decisionFrozen ? 'Decision Locked' : 'Decision Window'}
+                      </Stencil>
+                      <div className="flex items-center gap-2">
+                        {rotatePaused && autoRotateEnabled && (
+                          <Chip color={T.warning} icon="pause">{rotateResumeSeconds}s</Chip>
+                        )}
+                        {decisionTimerEnabled && (
+                          <Chip color={decisionFrozen ? T.warning : T.primary} icon={decisionFrozen ? 'timer_off' : 'timer'}>
+                            {decisionFrozen ? 'Frozen' : `${decisionCountdownSeconds}s`}
+                          </Chip>
+                        )}
+                      </div>
+                    </div>
+                    <div className="w-full overflow-hidden rounded-full" style={{ height: 8, background: T.surfaceLight }}>
+                      <div
+                        style={{
+                          width: `${decisionTimerEnabled ? (decisionFrozen ? 100 : Math.max(0, Math.min(100, ((DECISION_TIMER_MS - decisionCountdownMs) / DECISION_TIMER_MS) * 100))) : 0}%`,
+                          height: '100%',
+                          background: decisionFrozen
+                            ? `linear-gradient(90deg, ${T.warning}, ${T.warning}CC)`
+                            : `linear-gradient(90deg, ${T.primary}, ${T.accentBlue})`,
+                          transition: 'width 0.2s linear',
+                        }}
+                      />
+                    </div>
+                  </div>
+
                   <div className="text-center w-full max-w-2xl">
                     <p className="text-[13px] font-mono mb-3" style={{ color: T.primary }}>
-                      คำถามที่ {qIdx + 1} / {questions.length}
+                      คำถามที่ {qNumber || '-'} / {questions.length}
                     </p>
                     <p className="font-bold leading-snug" style={{ fontSize: 'clamp(22px,3vw,36px)', color: T.fg1 }}>
                       {activeQ.text}
                     </p>
                   </div>
 
-                  {chartData.length > 0 && (
+                  {displayChartData.length > 0 && (
                     <div className="w-full max-w-2xl">
                       <ResponsiveContainer width="100%" height={260}>
-                        <BarChart data={chartData} layout="vertical" margin={{ left: 16, right: 90, top: 4, bottom: 4 }}>
+                        <BarChart data={displayChartData} layout="vertical" margin={{ left: 16, right: 90, top: 4, bottom: 4 }}>
                           <XAxis type="number" domain={[0, 100]} tickFormatter={v => `${v}%`} tick={{ fill: T.fg3, fontSize: 13 }} />
                           <YAxis type="category" dataKey="option" tick={{ fill: T.fg1, fontSize: 15 }} width={200} />
                           <Bar dataKey="pct" radius={[0, 6, 6, 0]}
                             label={{ position: 'right', formatter: (v: unknown) => `${typeof v === 'number' ? v : 0}%`, fill: T.fg1, fontSize: 15, fontWeight: 700 }}>
-                            {chartData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
+                            {displayChartData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
                           </Bar>
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
                   )}
 
-                  {avgRating !== null && <RatingDisplay avg={avgRating} count={activeResponses.length} large />}
+                  {displayAvgRating !== null && <RatingDisplay avg={displayAvgRating} count={displayActiveResponses.length} large />}
 
-                  {activeQ.type === 'openText' && clusters.length > 0 && (
+                  {activeQ.type === 'openText' && displayClusters.length > 0 && (
                     <div className="w-full max-w-2xl">
                       <Stencil color={T.accentPurple} className="mb-6 text-center block">AI Theme Clusters</Stencil>
-                      <BubbleCloud clusters={clusters} selected={selectedCluster} onSelect={setSelectedCluster}
+                      <BubbleCloud clusters={displayClusters} selected={selectedCluster} onSelect={(cluster) => { registerPresentationInteraction(); setSelectedCluster(cluster) }}
                         focusId={focusCluster?.clusterId} large />
                       {selectedCluster && (
                         <div className="mt-8">
-                          <ClusterDetail cluster={selectedCluster} onCreateIssue={handleCreateIssue}
+                          <ClusterDetail cluster={selectedCluster} onCreateIssue={async (cluster, actions) => {
+                            registerPresentationInteraction()
+                            await handleCreateIssue(cluster, actions)
+                          }}
                             onClose={() => setSelectedCluster(null)} issuedIds={issuedIds} />
                         </div>
                       )}
                     </div>
                   )}
 
-                  {activeQ.type === 'openText' && activeResponses.length > 0 && !clusters.length && (
+                  {activeQ.type === 'openText' && displayActiveResponses.length > 0 && !displayClusters.length && (
                     <div className="w-full max-w-2xl">
-                      <LiveFeed responses={activeResponses} />
+                      <LiveFeed responses={displayActiveResponses} />
+                    </div>
+                  )}
+
+                  {displayActiveResponses.length === 0 && (
+                    <div className="w-full max-w-2xl rounded-2xl px-5 py-8 text-center"
+                      style={{ background: T.surfaceLight, border: `1px solid ${T.border}` }}>
+                      <MIcon name="inbox" size={34} color={T.fg3} />
+                      <p className="mt-2 text-[14px] font-semibold" style={{ color: T.fg2 }}>Waiting for responses</p>
                     </div>
                   )}
                 </>
@@ -778,9 +1016,9 @@ export default function LiveDashboardPage() {
             <div className="flex flex-col gap-4 p-5 border-l overflow-y-auto"
               style={{ borderColor: T.border + '60' }}>
               {[
-                { label: 'ตอบแล้ว',   value: activeResponses.length, color: T.success,    icon: 'done_all' },
+                { label: 'ตอบแล้ว',   value: displayActiveResponses.length, color: T.success,    icon: 'done_all' },
                 { label: 'คนทั้งหมด', value: totalResponders,         color: T.accentBlue, icon: 'group' },
-                { label: '% ตอบ',     value: respPct,                 color: T.primary,    icon: 'percent', suffix: '%' },
+                { label: '% ตอบ',     value: displayRespPct,          color: T.primary,    icon: 'percent', suffix: '%' },
               ].map(s => (
                 <div key={s.label} className="relative p-4 rounded-2xl flex flex-col items-center"
                   style={{ background: s.color + '12', border: `1px solid ${s.color}30` }}>
@@ -789,6 +1027,24 @@ export default function LiveDashboardPage() {
                   <Stencil color={s.color + 'AA'} className="mt-1">{s.label}</Stencil>
                 </div>
               ))}
+
+              <Card padding={14} style={{ background: T.surfaceLight, border: `1px solid ${T.border}` }}>
+                <div className="flex items-center justify-between gap-2 mb-3">
+                  <Stencil color={T.fg3}>Presentation Controls</Stencil>
+                  <span className="text-[10px]" style={{ color: T.fg3 }}>Interaction pauses auto rotate</span>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <GhostBtn onClick={() => { registerPresentationInteraction(); setAutoRotateEnabled(!autoRotateEnabled) }} icon={autoRotateEnabled ? 'pause_circle' : 'autoplay'}>
+                    {autoRotateEnabled ? 'Pause Auto Rotate' : 'Resume Auto Rotate'}
+                  </GhostBtn>
+                  <GhostBtn onClick={() => { registerPresentationInteraction(); setDecisionTimerEnabled(!decisionTimerEnabled) }} icon={decisionTimerEnabled ? 'timer' : 'timer_off'}>
+                    {decisionTimerEnabled ? 'Disable Timer' : 'Enable Timer'}
+                  </GhostBtn>
+                  <GhostBtn onClick={() => { registerPresentationInteraction(); void handleSnapshot() }} icon="photo_camera">
+                    {snapshotBusy ? 'Capturing Snapshot...' : 'Capture PNG Snapshot'}
+                  </GhostBtn>
+                </div>
+              </Card>
 
               <div className="flex flex-col gap-2 mt-auto pt-4 border-t" style={{ borderColor: T.border }}>
                 {session?.status === 'active' && (
@@ -817,7 +1073,7 @@ export default function LiveDashboardPage() {
   return (
     <>
       {QROverlay}
-      <div className="relative min-h-screen" style={{ background: T.bg }}>
+      <div ref={dashboardRef} className="relative min-h-screen" style={{ background: T.bg }}>
         <HUDGrid opacity={0.03} />
 
         {/* ── Reconnect error banner ─────────────────────────── */}
@@ -858,6 +1114,20 @@ export default function LiveDashboardPage() {
           </div>
         )}
 
+        {snapshotError && (
+          <div className="relative z-10 flex items-center gap-2 px-6 py-1.5"
+            style={{ background: T.error + '12', borderBottom: `1px solid ${T.error}30` }}>
+            <MIcon name="photo_camera" size={13} color={T.error} />
+            <p className="text-[11px] flex-1" style={{ color: T.error }}>
+              Snapshot failed: {snapshotError}
+            </p>
+            <button type="button" onClick={() => setSnapshotError(null)}
+              className="p-1 rounded hover:opacity-70">
+              <MIcon name="close" size={13} color={T.error} />
+            </button>
+          </div>
+        )}
+
         {/* Top bar */}
         <header className="relative flex items-center gap-3 px-6 py-3 border-b"
           style={{ borderColor: T.border, background: T.surface }}>
@@ -888,6 +1158,9 @@ export default function LiveDashboardPage() {
 
             <GhostBtn onClick={() => setShowSummary(v => !v)} icon="summarize" size="sm">Summary (S)</GhostBtn>
             <GhostBtn onClick={() => setShowQR(true)} icon="qr_code" size="sm">QR (Q)</GhostBtn>
+            <GhostBtn onClick={() => { void handleSnapshot() }} icon="photo_camera" size="sm">
+              {snapshotBusy ? 'Saving...' : 'Snapshot'}
+            </GhostBtn>
             <PrimaryBtn onClick={() => setPresMode(true)} icon="present_to_all" size="sm">Pres (P)</PrimaryBtn>
             <GhostBtn onClick={toggleFullscreen} icon="fullscreen" size="sm">Full (F)</GhostBtn>
 
@@ -919,7 +1192,7 @@ export default function LiveDashboardPage() {
                   const cnt = allResponses.filter(r => r.questionId === q.questionId).length
                   return (
                     <div key={q.questionId}
-                      onClick={() => session?.status === 'active' && activateQuestion(q.questionId)}
+                      onClick={() => session?.status === 'active' && activateQuestion(q.questionId, { causedByInteraction: true })}
                       className="p-3 rounded-xl cursor-pointer transition-all hover:bg-white/5"
                       style={{ background: isCurr ? T.primary + '18' : T.surfaceLight, border: `1px solid ${isCurr ? T.primary + '60' : T.border}` }}>
                       <div className="flex items-center justify-between mb-1">
@@ -937,21 +1210,21 @@ export default function LiveDashboardPage() {
             </Card>
 
             {/* Trend mini panel */}
-            <TrendPanel currentResponders={totalResponders} avgRatingVal={avgRating} clusters={clusters} />
+            <TrendPanel currentResponders={totalResponders} avgRatingVal={displayAvgRating} clusters={displayClusters} />
           </div>
 
           {/* Center: result */}
           <div className="xl:col-span-2 flex flex-col gap-4">
             {/* Insight banner */}
             {focusCluster && activeQ?.type === 'openText' && (
-              <InsightBanner cluster={focusCluster} totalCount={activeResponses.length} />
+              <InsightBanner cluster={focusCluster} totalCount={displayActiveResponses.length} />
             )}
 
             {/* Commander summary (toggle) */}
             {showSummary && (
               <CommanderSummary session={session} totalResponders={totalResponders}
-                activeResponses={activeResponses} clusters={clusters}
-                avgRating={avgRating} chartData={chartData} />
+                activeResponses={displayActiveResponses} clusters={displayClusters}
+                avgRating={displayAvgRating} chartData={displayChartData} />
             )}
 
             {activeQ ? (
@@ -965,20 +1238,20 @@ export default function LiveDashboardPage() {
                 </div>
                 <p className="text-[17px] font-semibold mb-5 leading-snug" style={{ color: T.fg1 }}>{activeQ.text}</p>
 
-                {chartData.length > 0 && (
+                {displayChartData.length > 0 && (
                   <>
                     <ResponsiveContainer width="100%" height={180}>
-                      <BarChart data={chartData} layout="vertical" margin={{ left: 0, right: 52, top: 0, bottom: 0 }}>
+                      <BarChart data={displayChartData} layout="vertical" margin={{ left: 0, right: 52, top: 0, bottom: 0 }}>
                         <XAxis type="number" domain={[0, 100]} tickFormatter={v => `${v}%`} tick={{ fill: T.fg3, fontSize: 11 }} />
                         <YAxis type="category" dataKey="option" tick={{ fill: T.fg2, fontSize: 12 }} width={170} />
                         <Bar dataKey="pct" radius={[0, 4, 4, 0]}
                           label={{ position: 'right', formatter: (v: unknown) => `${typeof v === 'number' ? v : 0}%`, fill: T.fg1, fontSize: 12, fontWeight: 600 }}>
-                          {chartData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
+                          {displayChartData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
                         </Bar>
                       </BarChart>
                     </ResponsiveContainer>
                     <div className="mt-2 flex gap-3 flex-wrap">
-                      {chartData.map((d, i) => (
+                      {displayChartData.map((d, i) => (
                         <div key={i} className="flex items-center gap-1.5">
                           <span className="w-2.5 h-2.5 rounded-sm" style={{ background: CHART_COLORS[i % CHART_COLORS.length] }} />
                           <span className="text-[11px]" style={{ color: T.fg2 }}>{d.option}</span>
@@ -991,19 +1264,29 @@ export default function LiveDashboardPage() {
                   </>
                 )}
 
-                {avgRating !== null && <RatingDisplay avg={avgRating} count={activeResponses.length} />}
+                {displayAvgRating !== null && <RatingDisplay avg={displayAvgRating} count={displayActiveResponses.length} />}
 
-                {activeQ.type === 'openText' && activeResponses.length > 0 && (
+                {activeQ.type === 'openText' && displayActiveResponses.length > 0 && (
                   <div className="mt-2">
                     <Stencil color={T.fg3} className="mb-2">
                       ความคิดเห็นล่าสุด
-                      {activeResponses.length > 0 && (
+                      {displayActiveResponses.length > 0 && (
                         <span className="ml-2 font-normal" style={{ color: T.success }}>
-                          ({activeResponses.length} ความคิดเห็น)
+                          ({displayActiveResponses.length} ความคิดเห็น)
                         </span>
                       )}
                     </Stencil>
-                    <LiveFeed responses={activeResponses} />
+                    <LiveFeed responses={displayActiveResponses} />
+                  </div>
+                )}
+
+                {displayActiveResponses.length === 0 && (
+                  <div className="mt-2 rounded-2xl px-4 py-6 text-center"
+                    style={{ background: T.surfaceLight, border: `1px solid ${T.border}` }}>
+                    <MIcon name="inbox" size={28} color={T.fg3} />
+                    <p className="mt-2 text-[13px] font-semibold" style={{ color: T.fg2 }}>
+                      Waiting for responses
+                    </p>
                   </div>
                 )}
               </Card>
@@ -1017,9 +1300,9 @@ export default function LiveDashboardPage() {
             {/* Response counters */}
             <div className="grid grid-cols-3 gap-3">
               {[
-                { label: 'ตอบแล้ว',   value: activeResponses.length, color: T.success },
+                { label: 'ตอบแล้ว',   value: displayActiveResponses.length, color: T.success },
                 { label: 'คนทั้งหมด', value: totalResponders,         color: T.fg1 },
-                { label: '% ตอบ',     value: respPct,                 color: T.primary, suffix: '%' },
+                { label: '% ตอบ',     value: displayRespPct,          color: T.primary, suffix: '%' },
               ].map(s => (
                 <Card key={s.label} padding={14} className="flex flex-col items-center">
                   <Stencil>{s.label}</Stencil>
@@ -1033,16 +1316,16 @@ export default function LiveDashboardPage() {
 
           {/* Right: bubble cloud + QR */}
           <div className="xl:col-span-1 flex flex-col gap-4">
-            {activeQ?.type === 'openText' && clusters.length > 0 ? (
+            {activeQ?.type === 'openText' && displayClusters.length > 0 ? (
               <Card padding={16}>
                 <div className="flex items-center justify-between mb-2">
                   <Stencil color={T.accentPurple}>Theme Clusters</Stencil>
-                  <span className="text-[10px]" style={{ color: T.fg3 }}>{clusters.length} themes</span>
+                  <span className="text-[10px]" style={{ color: T.fg3 }}>{displayClusters.length} themes</span>
                 </div>
-                <BubbleCloud clusters={clusters} selected={selectedCluster}
+                <BubbleCloud clusters={displayClusters} selected={selectedCluster}
                   onSelect={setSelectedCluster} focusId={focusCluster?.clusterId} animate={animEnabled} />
                 <div className="flex flex-col gap-2 mt-3">
-                  {clusters.map(cl => {
+                  {displayClusters.map(cl => {
                     const color  = CAT_COLOR[cl.category] ?? T.accentPurple
                     const active = selectedCluster?.clusterId === cl.clusterId
                     const issued = issuedIds.has(cl.clusterId)

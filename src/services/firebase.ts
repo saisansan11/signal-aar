@@ -27,5 +27,6 @@ if (!USE_MOCK) {
   console.info('[Firebase] 🟡 MOCK mode — add .env to use Firestore')
 }
 
-export const db   = _db
-export const auth = _auth
+export const firebaseApp = _app
+export const db          = _db
+export const auth        = _auth
