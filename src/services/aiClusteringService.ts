@@ -19,12 +19,20 @@ interface AiClusterResult {
   fallbackReason?: string
 }
 
+function redactPersonalData(text: string): string {
+  return text
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[email]')
+    .replace(/https?:\/\/\S+|www\.\S+/gi, '[url]')
+    .replace(/(?:\+?\d[\d\s().-]{7,}\d)/g, '[phone]')
+    .replace(/\bLine\s*ID\s*[:：]?\s*\S+/gi, 'Line ID [redacted]')
+}
+
 function sanitizeForAi(responses: Response[]): AiClusterRequest['responses'] {
   return responses
     .slice(0, MAX_RESPONSES)
     .map((response, index) => ({
       index,
-      text: response.answerText.replace(/\s+/g, ' ').trim().slice(0, MAX_RESPONSE_CHARS),
+      text: redactPersonalData(response.answerText).replace(/\s+/g, ' ').trim().slice(0, MAX_RESPONSE_CHARS),
     }))
     .filter(response => response.text.length > 0)
 }
